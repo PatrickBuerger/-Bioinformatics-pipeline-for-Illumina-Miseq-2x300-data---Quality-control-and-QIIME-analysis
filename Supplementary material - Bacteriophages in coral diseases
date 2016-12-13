@@ -1,0 +1,125 @@
+# START
+#########################################################
+##################### QC PIPELINE #######################
+#########################################################
+
+
+####__Unzip files_____________________________
+# gunzip input > output
+gunzip 1_S1_L001_R1_001.fastq.gz > 1_R1.fastq
+
+####_QC on raw files__________________________
+fastqc -f fastq FILENAME
+# examine data
+
+####__Merge reads_____________________________
+# Install PEAR
+# http://sco.h-its.org/exelixis/web/software/pear/doc.html
+sudo apt-get install build-essential autoconf automake libtool
+git clone https://github.com/xflouris/PEAR.git
+cd PEAR
+./autogen.sh
+./configure
+make
+sudo make install
+#### installed PEAR ####
+# Merge reads
+# pear -f LEFTfile -r RIGHTfile -o outputfile.fastq
+time pear -f 1_S1_L001_R1_001.fastq -r 1_S1_L001_R2_001.fastq -o 1_Merged.fastq
+time pear -f 2_S2_L001_R1_001.fastq -r 2_S2_L001_R2_001.fastq -o 2_Merged.fastq
+#### note: merging reads after QC not possible: sequences do not overlap. ####
+
+####_QUALITY BASED TRIMMING___________________________
+fastq_quality_filter -v -q 30 -p 95 -i FILE -o FILE
+
+####_Cut primers______________________________________
+# check with "head FILENAME" that primer sequences are on each side of the sequence.
+# each primer is 25 bp long, so cut on each side 25 base pairs to cut out the primer sequences
+# quality encoding: -Q = First base to keep .-f = Minimum length to kep. -m = clip bp at end of read. -t = short summary
+# clip first 25 bp from all sequences, forward and reverse primer cut together
+cat FILE.fastq | fastx_trimmer -v -Q 33 -f 25 -m 70 | fastx_trimmer -v -Q 33 -t 25 -m 70 > FILEnoprimer.fastq
+
+####_Minimum length of 100 bp, collapse files___________________________
+# java -jar trimmomatic-0.32.jar SE 3_collapsed.fasta 3_collapsed.fasta MINLEN:XY
+java -jar path.to/Trimmomatic-0.32/trimmomatic-0.32.jar SE FILE.fastq FILE.min100.fastq MINLEN:100 && fastx_collapser -v -i FILE.min100.fastq -o FILE.min100.fasta
+
+
+#####
+# summary example for sample:
+# Before Pear:
+# 955,641 for each file of the paired ends
+#
+# After Pear:
+# 841,979 merged reads (450,619 + 391,360 from the merged file split into two, QC did not work on full file)
+#
+# Into QC trim pipeline
+# Input: 841,979 sequences
+# OutputL: 382,389 sequences
+#
+# fastx_collapser:
+# Input: 382389 sequences (representing 382389 reads)
+# Output: 94185 sequences (representing 382389 reads)
+# 
+# Total leftover at the end: roughly 10 %
+#####
+
+
+#########################################################
+##################### QC PIPELINE #######################
+#########################################################
+# END
+
+
+
+
+
+
+# Start
+##########################################################
+#################### QIIME PIPELINE ######################
+##########################################################
+# Further explanations, see QIIME tutorials:
+# http://qiime.org/
+# http://qiime.org/tutorials/tutorial.html
+
+
+###_Make mapping file____________________________
+#according to the following scheme in a text file:
+#SampleID	BarcodeSequence	LinkerPrimerSequence	InputFileName	Description	
+SeaXY.1			SeaW-T4-BBD-MMYY_collapsed.fasta	SeaXY.1
+
+###_Add QIIME labels_____________________________
+add_qiime_labels.py -v -i ~/path.to/FILE.collapsed.fasta -m ~/path.to/mapping.txt -c InputFileName -o ~/path.to/
+
+###_De novo picking______________________________
+pick_otus.py -i ~/path.to/combined_seqs.fna -o ~/path.to/pick_otus_97_percent_rev/ -m uclust -t -s 0.97 -z
+#
+make_otu_table.py -i ~/path.to/pick_otus_97_percent_rev/combined_seqs_otus.txt -o ~/path.to/pick_otus_97_percent_rev/otu_table.biom
+#
+group_significance.py -i ~/path.to/pick_otus_97_percent_rev/otu_table.biom -m ~/path.to/mapping.txt -c Treatment -s kruskal_wallis -o ~/path.to/pick_otus_97_percent_rev/kw_ocs.txt --biom_samples_are_superset --print_non_overlap
+
+###_Taxonomy (only 16S rRNA)_____________________
+pick_rep_set.py -i otus/combined_seqs_otus.txt -f combined_seqs.fna -o rep_set1.fna
+#
+assign_taxonomy.py -i ~/path.to/pick_otus_97_percent_rev/rep_set97.fna -r ~/path.to/Greengenes/gg_13_5_otus/rep_set/97_otus.fasta -t ~/path.to/Greengenes/gg_13_5_otus/taxonomy/97_otu_taxonomy.txt -o ~/path.to/pick_otus_97_percent_rev/
+
+###_Sequence alignment___________________________
+align_seqs.py -i ~/path.to/pick_otus_97_percent_rev/rep_set97.fna -m mafft -o ~/path.to/pick_otus_97_percent_rev/mafft_alignment/
+#
+filter_alignment.py -i ~/path.to/pick_otus_97_percent_rev/pynast_alignment/rep_set97_aligned.fasta -o ~/path.to/pick_otus_97_percent_rev/pynast_alignment/filtered_alignment/
+
+###_Alpha_rarefaction____________________________
+make_phylogeny.py -i ~/path.to/pick_otus_97_percent_rev/pynast_alignment/filtered_alignment/rep_set97_aligned_pfiltered.fasta -o ~/path.to/pick_otus_97_percent_rev/rep_phylo.tre
+#
+alpha_rarefaction.py -i ~/path.to/pick_otus_97_percent_rev/otu_table.biom -o ~/path.to/pick_otus_97_percent_rev/arare_max99/ -f -m ~/path.to/mapping.txt -p ~/path.to/alpha_params.txt -t ~/path.to/pick_otus_97_percent_rev/rep_phylo.tre
+
+
+##########################################################
+#################### QIIME PIPELINE ######################
+##########################################################
+# End
+
+
+
+
+
